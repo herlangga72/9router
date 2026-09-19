@@ -6,7 +6,7 @@ variants:
 | Image | Contents | Use it when |
 | --- | --- | --- |
 | `<user>/9router:latest` | 9Router only (no Python). Smallest. | You want the lean image, with or without an external Headroom sidecar. |
-| `<user>/9router:latest-headroom` | 9Router **+** Python **+** `headroom-ai[proxy]`. | You want Headroom bundled and managed from the dashboard, no sidecar. |
+| `<user>/9router:latest-headroom` | 9Router **+** Python **+** `headroom-ai[proxy]` (Debian/glibc). | You want Headroom bundled and managed from the dashboard, no sidecar. |
 
 `<user>` is your Docker Hub namespace (default in CI: `herlangga72`).
 
@@ -74,7 +74,9 @@ docker run -d \
 
 Headroom compresses prompts/tool output before they reach the provider.
 9Router calls its `/v1/compress` endpoint and fails open if it is unavailable.
-There are two ways to run it.
+There are two ways to run it. Headroom pulls in Python plus transformers,
+onnxruntime and friends, so bundling it costs a few hundred MB. The sidecar
+keeps the 9Router image at ~53 MiB.
 
 ### Option A: bundled in one image (recommended for single-container hosts)
 
@@ -173,12 +175,23 @@ DOCKERHUB_USER=herlangga72 scripts/docker-push.sh 0.5.81
 
 ## Image size notes
 
+| Variant | Compressed (pull size) | Uncompressed |
+| --- | --- | --- |
+| `runner` (default) | ~53 MiB | ~128 MiB |
+| `headroom` | ~252 MiB | ~748 MiB |
+
+For reference, the upstream Node-based image is ~216 MiB compressed, and the
+standalone Headroom image is ~173 MiB compressed on its own.
+
 - Base is `oven/bun:1-alpine`; the runtime uses Bun's built-in `bun:sqlite`, so
-  no native build toolchain is shipped.
+  no native build toolchain is shipped. Bun itself is ~70 MiB of the
+  uncompressed size.
 - Only Next's traced standalone output plus the few files tracing cannot see
   (`src/mitm`, `node-forge`, `node-machine-id`, `sql.js`) are copied into the
   runtime layer.
 - The `better-sqlite3` optional native addon is not installed (Bun does not use
   it); a build-time placeholder satisfies Next's resolver.
-- The `headroom` variant adds Python 3 plus `headroom-ai[proxy]`, which is
+- The `headroom` variant uses a **Debian/glibc** base (`oven/bun:1-slim`)
+  because `headroom-ai` depends on packages such as `ast-grep-cli` that publish
+  no musl wheels. It adds Python 3 plus `headroom-ai[proxy]`, which is
   inherently large. Use the default image plus a sidecar if size matters.

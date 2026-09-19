@@ -1,19 +1,23 @@
 # syntax=docker/dockerfile:1.7
 
 # ---------------------------------------------------------------------------
-# 9Router — Bun/Alpine image, optimized for size.
+# 9Router — Bun image optimized for size, with an optional bundled Headroom.
 #
 # Build targets:
-#   runner   (default)  Minimal 9Router. No Python, smallest image.
-#   headroom            runner + Python 3 + headroom-ai[proxy]. The dashboard's
-#                       Token Saver can then install/start/stop Headroom inside
-#                       this container, so no sidecar is required.
+#   runner   (default)  Minimal 9Router on Alpine/musl. Smallest image.
+#   headroom            Same app on Debian/glibc + Python 3 + headroom-ai.
+#                       The dashboard's Token Saver can then install/start/stop
+#                       Headroom inside the container, no sidecar required.
 #
 #   docker build -t <user>/9router:latest .
 #   docker build --target headroom -t <user>/9router:latest-headroom .
+#
+# The headroom variant uses a glibc base because headroom-ai depends on
+# packages (e.g. ast-grep-cli) that publish no musl wheels.
 # ---------------------------------------------------------------------------
 
 ARG BUN_IMAGE=oven/bun:1-alpine
+ARG BUN_GLIBC_IMAGE=oven/bun:1-slim
 # Override to use a mirror, e.g. https://registry.npmmirror.com
 ARG BUN_REGISTRY=https://registry.npmjs.org
 # Override for private/mirrored PyPI indexes (used by the headroom target).
@@ -58,7 +62,8 @@ RUN bun --bun next build --webpack \
 # ------------------------------- payload -----------------------------------
 # Assemble the exact runtime tree as ONE directory, so the final image is a
 # single COPY layer. (Deleting files in a later layer would not shrink the
-# image: Docker layers are additive.)
+# image: Docker layers are additive.) The tree is pure JS/wasm, so it is
+# portable between the musl and glibc runtimes.
 FROM builder AS payload
 RUN <<'EOF'
 set -eux
@@ -89,8 +94,61 @@ rm -rf node_modules/next/dist/compiled/babel \
        node_modules/next/dist/compiled/schema-utils3
 EOF
 
-# ------------------------------ runtime ------------------------------------
-FROM base AS runtime
+# --------------------------- app (glibc, shared) ----------------------------
+# Runtime setup shared by the glibc images. Kept separate from the app COPY so
+# both the headroom image and any future glibc target reuse it.
+FROM ${BUN_GLIBC_IMAGE} AS app-glibc
+WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=20128 \
+    HOSTNAME=0.0.0.0 \
+    NEXT_TELEMETRY_DISABLED=1 \
+    DATA_DIR=/app/data \
+    HOME=/home/bun
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gosu ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+COPY --from=payload --chown=bun:bun /app/.next/standalone ./
+RUN mkdir -p /app/data /app/data-home && chown -R bun:bun /app/data /app/data-home
+EXPOSE 20128
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bun", "custom-server.js"]
+
+# --------------------------- headroom (optional) ---------------------------
+# Same app plus Python + the Headroom proxy, preinstalled and managed by the
+# dashboard (Endpoint -> Token Saver -> Headroom). Adds a few hundred MB; skip
+# it if you run Headroom as a sidecar and only need the small `runner` image.
+FROM app-glibc AS headroom
+ARG PIP_INDEX_URL
+LABEL org.opencontainers.image.title="9router-headroom" \
+      org.opencontainers.image.description="9Router with bundled Headroom token saver (Bun/Debian)" \
+      org.opencontainers.image.source="https://github.com/herlangga72/9router" \
+      org.opencontainers.image.url="https://9router.com" \
+      org.opencontainers.image.licenses="MIT"
+RUN --mount=type=cache,target=/root/.cache/pip <<'EOF'
+set -eux
+apt-get update
+apt-get install -y --no-install-recommends python3 python3-venv python3-pip
+rm -rf /var/lib/apt/lists/*
+python3 -m venv /opt/headroom
+/opt/headroom/bin/pip install --index-url "$PIP_INDEX_URL" "headroom-ai[proxy]"
+# Bytecode caches are regenerated on first import and are ~20% of the venv.
+# *.dist-info is kept: the dashboard's `pip list` probe reads its metadata.
+find /opt/headroom -type d -name __pycache__ -prune -exec rm -rf {} +
+find /opt/headroom -name '*.pyc' -delete
+# App runs as `bun`; it installs optional extras and spawns the proxy itself.
+chown -R bun:bun /opt/headroom
+EOF
+# Puts `headroom` + its matching `python3` on PATH so 9Router auto-detects both.
+ENV PATH="/opt/headroom/bin:${PATH}" \
+    HEADROOM_URL=http://127.0.0.1:8787
+
+# --------------------------- runner (default) ------------------------------
+# Minimal Alpine/musl image. Declared last so a plain `docker build .` produces
+# the smallest variant.
+FROM base AS runner
 LABEL org.opencontainers.image.title="9router" \
       org.opencontainers.image.description="Self-hosted AI router dashboard (Bun/Alpine)" \
       org.opencontainers.image.source="https://github.com/herlangga72/9router" \
@@ -107,46 +165,14 @@ ENV NODE_ENV=production \
 # su-exec lets the entrypoint fix volume ownership then drop root.
 RUN apk add --no-cache su-exec
 
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Single layer: standalone output already contains .next/static, public/ and
 # custom-server.js (copy-standalone-assets.mjs puts them there).
 COPY --from=payload --chown=bun:bun /app/.next/standalone ./
-
-RUN <<'EOF'
-set -eux
-cat > /entrypoint.sh <<'ENTRY'
-#!/bin/sh
-set -e
-# Mounted volumes arrive root-owned; make them writable by the app user.
-chown -R bun:bun /app/data /app/data-home 2>/dev/null || true
-exec su-exec bun "$@"
-ENTRY
-chmod +x /entrypoint.sh
-mkdir -p /app/data /app/data-home
-chown -R bun:bun /app/data /app/data-home
-EOF
+RUN mkdir -p /app/data /app/data-home && chown -R bun:bun /app/data /app/data-home
 
 EXPOSE 20128
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bun", "custom-server.js"]
-
-# --------------------------- headroom (optional) ---------------------------
-# Same image plus Python + the Headroom proxy, preinstalled and managed by the
-# dashboard (Endpoint -> Token Saver -> Headroom). Adds a few hundred MB; skip
-# it if you run Headroom as a sidecar and only need the small `runner` image.
-FROM runtime AS headroom
-ARG PIP_INDEX_URL
-RUN <<'EOF'
-set -eux
-apk add --no-cache python3 py3-pip
-python3 -m venv /opt/headroom
-/opt/headroom/bin/pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" "headroom-ai[proxy]"
-# App runs as `bun`; it installs optional extras and spawns the proxy itself.
-chown -R bun:bun /opt/headroom
-EOF
-# Puts `headroom` + its matching `python3` on PATH so 9Router auto-detects both.
-ENV PATH="/opt/headroom/bin:${PATH}" \
-    HEADROOM_URL=http://127.0.0.1:8787
-
-# --------------------------- runner (default) ------------------------------
-# Declared last so a plain `docker build .` produces the smallest image.
-FROM runtime AS runner

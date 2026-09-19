@@ -33,7 +33,7 @@ jobs:
         include:
           # Smallest image: 9Router only (`:latest`, `:v1.2.3`).
           - target: runner
-            suffix: ""/mo
+            suffix: ""
           # All-in-one: 9Router + Headroom (`:latest-headroom`).
           - target: headroom
             suffix: "-headroom"
