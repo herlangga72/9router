@@ -165,6 +165,8 @@ Repository secrets to configure once:
 Optionally set a repository variable `DOCKERHUB_USERNAME` to control the
 namespace without editing the workflow. Create the Docker Hub repository
 `<username>/9router` once (it can be private or public); the token pushes to it.
+If `DOCKERHUB_TOKEN` is not set, the workflow publishes to GHCR only instead of
+failing.
 
 Manual push:
 
