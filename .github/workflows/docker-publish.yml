@@ -1,14 +1,24 @@
-name: Build and Push Docker Image
+name: Build and Push Docker Images
 
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Target platforms"
+        type: string
+        default: "linux/amd64,linux/arm64"
+      push:
+        description: "Push to registries (uncheck for a build-only run)"
+        type: boolean
+        default: true
 
 env:
   GHCR_IMAGE: ghcr.io/${{ github.repository }}
-  DOCKERHUB_IMAGE: decolua/9router
+  # Change to your Docker Hub namespace, or set a repo variable DOCKERHUB_USERNAME.
+  DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_USERNAME || github.repository_owner }}/9router
 
 jobs:
   build-and-push:
@@ -17,12 +27,26 @@ jobs:
       contents: read
       packages: write
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Smallest image: 9Router only (`:latest`, `:v1.2.3`).
+          - target: runner
+            suffix: ""/mo
+          # All-in-one: 9Router + Headroom (`:latest-headroom`).
+          - target: headroom
+            suffix: "-headroom"
+
     steps:
       - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -30,6 +54,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.push) && env.DOCKERHUB_TOKEN_PRESENT == 'true' }}
+        env:
+          DOCKERHUB_TOKEN_PRESENT: ${{ secrets.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -42,19 +69,23 @@ jobs:
           images: |
             ${{ env.GHCR_IMAGE }}
             ${{ env.DOCKERHUB_IMAGE }}
+          flavor: |
+            suffix=${{ matrix.suffix }},onlatest=true
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          target: ${{ matrix.target }}
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache
-          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache,mode=max
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ inputs.platforms || 'linux/amd64,linux/arm64' }}
+          cache-from: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache${{ matrix.suffix }}
+          cache-to: type=registry,ref=${{ env.GHCR_IMAGE }}:buildcache${{ matrix.suffix }},mode=max
           provenance: false
           sbom: false

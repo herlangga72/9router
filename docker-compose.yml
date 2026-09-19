@@ -1,6 +1,10 @@
 services:
   9router:
-    image: decolua/9router:latest
+    # Default image: smallest footprint, no Python bundled.
+    build:
+      context: .
+      target: runner
+    image: ${NINE_ROUTER_IMAGE:-herlangga72/9router:latest}
     container_name: 9router
     restart: always
     ports:
@@ -8,22 +12,24 @@ services:
     volumes:
       - 9router-data:/app/data
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATA_DIR: /app/data
       PORT: "20128"
       HOSTNAME: "0.0.0.0"
       NODE_ENV: production
-      HEADROOM_URL: http://headroom:8787
-    depends_on:
-      - headroom
 
+  # Optional Headroom sidecar (external Python proxy).
+  #   docker compose --profile sidecar up -d
+  # then set HEADROOM_URL=http://headroom:8787 (uncomment below).
   headroom:
     image: ghcr.io/chopratejas/headroom:latest
     container_name: headroom
     restart: always
     ports:
       - "8787:8787"
+    profiles: ["sidecar"]
 
 volumes:
   9router-data:

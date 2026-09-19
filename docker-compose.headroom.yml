@@ -1,0 +1,35 @@
+# All-in-one image: 9Router + Headroom bundled.
+#
+# 9Router's dashboard can then install Headroom compression extras and
+# start/stop the proxy inside the same container (no sidecar).
+#
+#   docker compose -f docker-compose.headroom.yml up -d --build
+#
+# The Headroom proxy is exposed on 8787 for optional direct access.
+services:
+  9router:
+    build:
+      context: .
+      target: headroom
+    image: ${NINE_ROUTER_IMAGE:-herlangga72/9router:latest-headroom}
+    container_name: 9router
+    restart: always
+    ports:
+      - "20128:20128"
+      - "8787:8787"
+    volumes:
+      - 9router-data:/app/data
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      HOSTNAME: "0.0.0.0"
+      NODE_ENV: production
+      # 9Router auto-detects the bundled `headroom` binary on PATH.
+      HEADROOM_URL: http://127.0.0.1:8787
+
+volumes:
+  9router-data:
+    name: 9router-data

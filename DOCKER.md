@@ -1,12 +1,20 @@
 # Docker
 
-Run 9Router in a container. Published image: [`decolua/9router`](https://hub.docker.com/r/decolua/9router) — multi-platform `linux/amd64` + `linux/arm64`.
+Run 9Router in a container. This fork builds a **Bun + Alpine** image with two
+variants:
+
+| Image | Contents | Use it when |
+| --- | --- | --- |
+| `<user>/9router:latest` | 9Router only (no Python). Smallest. | You want the lean image, with or without an external Headroom sidecar. |
+| `<user>/9router:latest-headroom` | 9Router **+** Python **+** `headroom-ai[proxy]`. | You want Headroom bundled and managed from the dashboard, no sidecar. |
+
+`<user>` is your Docker Hub namespace (default in CI: `herlangga72`).
 
 ---
 
 # 👤 For Users
 
-## Quick start
+## Quick start (small image)
 
 ```bash
 docker run -d \
@@ -14,10 +22,10 @@ docker run -d \
   -v "$HOME/.9router:/app/data" \
   -e DATA_DIR=/app/data \
   --name 9router \
-  decolua/9router:latest
+  herlangga72/9router:latest
 ```
 
-App listens on port `20128`. Open: http://localhost:20128
+App listens on port `20128`. Open <http://localhost:20128>.
 
 ## Manage container
 
@@ -31,11 +39,12 @@ docker rm -f 9router          # remove
 ## Data persistence
 
 ```bash
--v "$HOME/.9router:/app/data" \
--e DATA_DIR=/app/data
+-v "$HOME/.9router:/app/data" -e DATA_DIR=/app/data
 ```
 
-Without `DATA_DIR`, the app falls back to `~/.9router/` (macOS/Linux) or `%APPDATA%\9router\` (Windows). In the container, `DATA_DIR=/app/data` makes the bind mount work.
+Without `DATA_DIR`, the app falls back to `~/.9router/` (macOS/Linux) or
+`%APPDATA%\9router\` (Windows). In the container `DATA_DIR=/app/data` makes the
+bind mount work. The entrypoint fixes volume ownership on start.
 
 Data layout under `$DATA_DIR/`:
 
@@ -46,9 +55,6 @@ $DATA_DIR/
 │   └── backups/          # auto backups
 └── ...                   # certs, logs, runtime configs
 ```
-
-Host path: `$HOME/.9router/db/data.sqlite`
-Container path: `/app/data/db/data.sqlite`
 
 ## Optional env vars
 
@@ -61,72 +67,118 @@ docker run -d \
   -e HOSTNAME=0.0.0.0 \
   -e DEBUG=true \
   --name 9router \
-  decolua/9router:latest
+  herlangga72/9router:latest
 ```
 
-## Optional Headroom sidecar
+## Headroom (token saver)
 
-The 9Router image does not bundle Python or Headroom. To use Headroom in Docker, run it as a separate service and point 9Router at that proxy:
+Headroom compresses prompts/tool output before they reach the provider.
+9Router calls its `/v1/compress` endpoint and fails open if it is unavailable.
+There are two ways to run it.
 
-```yaml
-services:
-  9router:
-    image: decolua/9router:latest
-    ports:
-      - "20128:20128"
-    volumes:
-      - "$HOME/.9router:/app/data"
-    environment:
-      DATA_DIR: /app/data
-      HEADROOM_URL: http://headroom:8787
-    depends_on:
-      - headroom
-
-  headroom:
-    image: ghcr.io/chopratejas/headroom:latest
-    ports:
-      - "8787:8787"
-```
-
-In the dashboard, open `Endpoint` → `Token Saver` → `Headroom`, confirm the URL is `http://headroom:8787`, recheck status, then enable Headroom.
-
-If Headroom runs on the Docker host instead of as a sidecar, use `http://host.docker.internal:8787` on macOS/Windows. On Linux, add `--add-host=host.docker.internal:host-gateway` or the equivalent compose `extra_hosts` entry.
-
-## Update to latest
+### Option A: bundled in one image (recommended for single-container hosts)
 
 ```bash
-docker pull decolua/9router:latest
-docker rm -f 9router
-# re-run the quick start command
+docker run -d \
+  -p 20128:20128 -p 8787:8787 \
+  -v "$HOME/.9router:/app/data" \
+  -e DATA_DIR=/app/data \
+  -e HEADROOM_URL=http://127.0.0.1:8787 \
+  --name 9router \
+  herlangga72/9router:latest-headroom
 ```
+
+Or with Compose:
+
+```bash
+docker compose -f docker-compose.headroom.yml up -d --build
+```
+
+Then open **Dashboard → Endpoint → Token Saver → Headroom**. The URL is already
+`http://127.0.0.1:8787`; recheck status, optionally install the `code`/`ml`
+compression extras, start the proxy, and enable Headroom.
+
+Because the image ships `headroom` and a matching `python3` on `PATH`, the
+dashboard can install extras and start/stop the proxy inside the container.
+
+### Option B: sidecar container (keeps the app image small)
+
+```bash
+docker compose --profile sidecar up -d
+# then add to the 9router service environment:
+#   HEADROOM_URL: http://headroom:8787
+```
+
+If Headroom runs on the Docker host instead, use
+`http://host.docker.internal:8787`; on Linux add
+`--add-host=host.docker.internal:host-gateway`.
 
 ---
 
 # 🛠 For Developers
 
-## Build image locally (test)
+## Build locally
 
 ```bash
-cd app && docker build -t 9router .
+# Smallest image (default target)
+docker build -t 9router:latest .
 
-docker run --rm -p 20128:20128 \
-  -v "$HOME/.9router:/app/data" \
-  -e DATA_DIR=/app/data \
-  9router
+# All-in-one with Headroom
+docker build --target headroom -t 9router:latest-headroom .
 ```
 
-## Publish (automatic via CI)
+Build args (all optional):
 
-Push a git tag `v*` → GitHub Actions builds multi-platform (amd64+arm64) and pushes to:
-- `ghcr.io/decolua/9router:v{version}` + `:latest`
-- `decolua/9router:v{version}` + `:latest`
+| Arg | Default | Purpose |
+| --- | --- | --- |
+| `BUN_IMAGE` | `oven/bun:1-alpine` | Base image. |
+| `BUN_REGISTRY` | `https://registry.npmjs.org` | npm registry mirror, e.g. `https://registry.npmmirror.com`. |
+| `PIP_INDEX_URL` | `https://pypi.org/simple` | PyPI index for the `headroom` target. |
+
+Example with mirrors:
 
 ```bash
-# Use scripts/release.js (recommended)
-node scripts/release.js "Release title" "Notes"
-
-# Or manually
-git tag v0.4.x && git push origin v0.4.x
+docker build \
+  --build-arg BUN_REGISTRY=https://registry.npmmirror.com \
+  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+  --target headroom -t 9router:headroom .
 ```
 
-Workflow: `app/.github/workflows/docker-publish.yml`
+## Publish to Docker Hub
+
+Automatic (GitHub Actions): push a tag `v*` (or run the workflow manually).
+The workflow builds `linux/amd64` + `linux/arm64` for both variants and pushes:
+
+- `<DOCKERHUB_USERNAME>/9router:latest` and `:latest-headroom`
+- `ghcr.io/<owner>/9router:latest` and `:latest-headroom`
+- version tags, e.g. `:0.5.81` and `:0.5.81-headroom`
+
+Repository secrets to configure once:
+
+| Secret | Value |
+| --- | --- |
+| `DOCKERHUB_USERNAME` | Docker Hub username (also used as the image namespace). |
+| `DOCKERHUB_TOKEN` | Docker Hub access token with Read & Write. |
+
+Optionally set a repository variable `DOCKERHUB_USERNAME` to control the
+namespace without editing the workflow. Create the Docker Hub repository
+`<username>/9router` once (it can be private or public); the token pushes to it.
+
+Manual push:
+
+```bash
+docker login
+DOCKERHUB_USER=herlangga72 scripts/docker-push.sh 0.5.81
+```
+
+## Image size notes
+
+- Base is `oven/bun:1-alpine`; the runtime uses Bun's built-in `bun:sqlite`, so
+  no native build toolchain is shipped.
+- Only Next's traced standalone output plus the few files tracing cannot see
+  (`src/mitm`, `node-forge`, `node-machine-id`, `sql.js`) are copied into the
+  runtime layer.
+- The `better-sqlite3` optional native addon is not installed (Bun does not use
+  it); a build-time placeholder satisfies Next's resolver.
+- The `headroom` variant adds Python 3 plus `headroom-ai[proxy]`, which is
+  inherently large. Use the default image plus a sidecar if size matters.
