@@ -133,7 +133,7 @@ Build args (all optional):
 
 | Arg | Default | Purpose |
 | --- | --- | --- |
-| `BUN_IMAGE` | `oven/bun:1-alpine` | Base image. |
+| `BUN_IMAGE` | `oven/bun:1.4-alpine` | Base image. |
 | `BUN_REGISTRY` | `https://registry.npmjs.org` | npm registry mirror, e.g. `https://registry.npmmirror.com`. |
 | `PIP_INDEX_URL` | `https://pypi.org/simple` | PyPI index for the `headroom` target. |
 
@@ -185,7 +185,7 @@ DOCKERHUB_USER=herlangga72 scripts/docker-push.sh 0.5.81
 For reference, the upstream Node-based image is ~216 MiB compressed, and the
 standalone Headroom image is ~173 MiB compressed on its own.
 
-- Base is `oven/bun:1-alpine`; the runtime uses Bun's built-in `bun:sqlite`, so
+- Base is `oven/bun:1.4-alpine`; the runtime uses Bun's built-in `bun:sqlite`, so
   no native build toolchain is shipped. Bun itself is ~70 MiB of the
   uncompressed size.
 - Only Next's traced standalone output plus the few files tracing cannot see
@@ -193,7 +193,7 @@ standalone Headroom image is ~173 MiB compressed on its own.
   runtime layer.
 - The `better-sqlite3` optional native addon is not installed (Bun does not use
   it); a build-time placeholder satisfies Next's resolver.
-- The `headroom` variant uses a **Debian/glibc** base (`oven/bun:1-slim`)
+- The `headroom` variant uses a **Debian/glibc** base (`oven/bun:1.4-slim`)
   because `headroom-ai` depends on packages such as `ast-grep-cli` that publish
   no musl wheels. It adds Python 3 plus `headroom-ai[proxy]`, which is
   inherently large. Use the default image plus a sidecar if size matters.

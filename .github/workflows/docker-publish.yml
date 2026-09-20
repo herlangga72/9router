@@ -62,11 +62,25 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Resolve registry image list
+        id: images
+        run: |
+          # metadata-action needs a newline-separated `images` list. A multiline
+          # output avoids the literal `\n` that breaks tag parsing.
+          {
+            echo "list<<EOF"
+            echo "$GHCR_IMAGE"
+            if [ "$DOCKERHUB_ENABLED" = "true" ]; then
+              echo "$DOCKERHUB_IMAGE"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.DOCKERHUB_ENABLED == 'true' && format('{0}\n{1}', env.GHCR_IMAGE, env.DOCKERHUB_IMAGE) || env.GHCR_IMAGE }}
+          images: ${{ steps.images.outputs.list }}
           flavor: |
             suffix=${{ matrix.suffix }},onlatest=true
           tags: |

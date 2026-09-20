@@ -16,8 +16,8 @@
 # packages (e.g. ast-grep-cli) that publish no musl wheels.
 # ---------------------------------------------------------------------------
 
-ARG BUN_IMAGE=oven/bun:1-alpine
-ARG BUN_GLIBC_IMAGE=oven/bun:1-slim
+ARG BUN_IMAGE=oven/bun:1.4-alpine
+ARG BUN_GLIBC_IMAGE=oven/bun:1.4-slim
 # Override to use a mirror, e.g. https://registry.npmmirror.com
 ARG BUN_REGISTRY=https://registry.npmjs.org
 # Override for private/mirrored PyPI indexes (used by the headroom target).
